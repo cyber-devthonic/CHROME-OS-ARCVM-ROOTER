@@ -29,6 +29,7 @@ jobs:
             libelf-dev libssl-dev libncurses5-dev python3 cpio unzip jq \
             device-tree-compiler clang lld llvm zip qrencode
           free -h && df -h
+
       - name: 2. Create Build Directory
         run: |
           export BUILD_DIR="$HOME/arcvm_root_build"
@@ -36,15 +37,13 @@ jobs:
           cd "$BUILD_DIR"
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
           pwd
-<<<<<<< HEAD
-=======
 
->>>>>>> 637fe6eb49b1cd565de43e9653aee505bca7fa89
       - name: 3. Clone ChromeOS 5.10 ARCVM Kernel
         run: |
           cd "$BUILD_DIR"
           git clone --depth=1 https://chromium.googlesource.com/chromiumos/third_party/kernel.git -b chromeos-5.10-arcvm kernel_source
           cd kernel_source && git log -1 --oneline
+
       - name: 4. Inject SukiSU-Ultra
         run: |
           cd "$BUILD_DIR/kernel_source"
@@ -54,18 +53,12 @@ jobs:
           echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
           sed -i "s/DKSU_VERSION=12800/DKSU_VERSION=$KSU_VERSION/" ../Makefile
           echo "SukiSU Ultra v$KSU_VERSION injected"
-<<<<<<< HEAD
-=======
 
->>>>>>> 637fe6eb49b1cd565de43e9653aee505bca7fa89
       - name: Disable Werror for KPM module
         run: |
           cd "$BUILD_DIR/kernel_source/drivers/kernelsu/kpm"
           echo "CFLAGS_kpm.o := -Wno-error" >> Makefile
-<<<<<<< HEAD
-=======
 
->>>>>>> 637fe6eb49b1cd565de43e9653aee505bca7fa89
       - name: 5. Apply All Patches
         run: |
           cd "$BUILD_DIR"
@@ -73,7 +66,7 @@ jobs:
           git clone --depth=1 https://github.com/ShirkNeko/SukiSU_patch.git
           cd kernel_source
           cp ../susfs/kernel_patches/50_add_susfs_in_gki-android13-5.10.patch .
-          patch -p1 < 50_add_susfs_in_gki-android14-5.10.patch || true
+          patch -p1 < 50_add_susfs_in_gki-android13-5.10.patch || true
           cp ../SukiSU_patch/69_hide_stuff.patch .
           patch -p1 -F3 < 69_hide_stuff.patch
           cp ../SukiSU_patch/hooks/syscall_hooks.patch .
@@ -83,19 +76,28 @@ jobs:
             cp ../SukiSU_patch/other/zram/zram_patch/5.10/lz4kd.patch . && patch -p1 < lz4kd.patch || true
           fi
           git status --short
-<<<<<<< HEAD
-      - name: Fix kernel/sched/rt.c printk format
-        run: |
-          cd "$BUILD_DIR/kernel_source"
-          sed -i 's/"(%ld)\\n", rq_of_rt_rq(rt_rq)->cpu, rt_rq->rt_time);/"(%llu)\\n", rq_of_rt_rq(rt_rq)->cpu, rt_rq->rt_time);/g' kernel/sched/rt.c
-=======
 
       - name: Fix kernel/sched/rt.c printk format
         run: |
           cd "$BUILD_DIR/kernel_source"
-          sed -i 's/"(%ld)\n", rq_of_rt_rq(rt_rq)->cpu, rt_rq->rt_time);/"(%llu)\n", rq_of_rt_rq(rt_rq)->cpu, rt_rq->rt_time);/g' kernel/sched/rt.c
+          # Replace any printk_deferred_once(...) that prints rt_time with %ld to a safe %llu + cast.
+          # Use perl to do a robust multiline/global substitution.
+          perl -0777 -pe '
+            s{
+              printk_deferred_once\(\s*"suspected\ host\ suspend\.\ cpu\ %d\ rt_time\s*
+              \(\%ld\)\\n"\s*,\s*rq_of_rt_rq\(rt_rq\)->cpu\s*,\s*rq_of_rt_rq\(rt_rq\)->rt_time\s*\);
+            }{
+              printk_deferred_once("suspected host suspend. cpu %d rt_time (%llu)\n", rq_of_rt_rq(rt_rq)->cpu, (unsigned long long)rq_of_rt_rq(rt_rq)->rt_time);
+            }sgx;
+          ' -i kernel/sched/rt.c || true
+          # Show what changed (or the existing line) for debugging
+          grep -n "suspected host suspend" kernel/sched/rt.c || true
+          # As a fallback, if the perl replacement missed it, attempt a single-line sed replace
+          sed -n '1,200p' kernel/sched/rt.c | sed -n '1,200p'
+          sed -i 's/(%ld)\\n", rq_of_rt_rq(rt_rq)->cpu, rq_of_rt_rq(rt_rq)->rt_time);/(%llu)\\n", rq_of_rt_rq(rt_rq)->cpu, (unsigned long long)rq_of_rt_rq(rt_rq)->rt_time);/g' kernel/sched/rt.c || true
+          # Show the changed snippet
+          grep -n "rt_time" kernel/sched/rt.c || true
 
->>>>>>> 637fe6eb49b1cd565de43e9653aee505bca7fa89
       - name: 6. Configure Kernel
         run: |
           cd "$BUILD_DIR/kernel_source"
@@ -128,10 +130,7 @@ jobs:
           EOF
           sed -i 's/ -dirty//g' scripts/setlocalversion
           grep KSU .config | head -5
-<<<<<<< HEAD
-=======
 
->>>>>>> 637fe6eb49b1cd565de43e9653aee505bca7fa89
       - name: 7. Build bzImage
         timeout-minutes: 20
         run: |
@@ -139,10 +138,7 @@ jobs:
           make ARCH=x86_64 -j$(nproc) bzImage
           ls -lh arch/x86/boot/bzImage
           file arch/x86/boot/bzImage
-<<<<<<< HEAD
-=======
 
->>>>>>> 637fe6eb49b1cd565de43e9653aee505bca7fa89
       - name: 8. Download SUSFS Module (CI)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -152,10 +148,7 @@ jobs:
           ARTIFACT_URL=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" "https://api.github.com/repos/sidex15/susfs4ksu-module/actions/runs/$LATEST_ID/artifacts" | jq -r '.artifacts[0].archive_download_url')
           curl -L -H "Authorization: Bearer $GITHUB_TOKEN" -o susfs.zip "$ARTIFACT_URL"
           unzip -l susfs.zip | head -3
-<<<<<<< HEAD
-=======
 
->>>>>>> 637fe6eb49b1cd565de43e9653aee505bca7fa89
       - name: 9. Pack Flashable ZIP
         run: |
           cd "$BUILD_DIR"
@@ -165,19 +158,13 @@ jobs:
           cd AnyKernel3
           zip -r9 "../ARCVM-SUKISU-ULTRA.zip" * -x .git
           ls -lh ../ARCVM-SUKISU-ULTRA.zip
-<<<<<<< HEAD
-=======
 
->>>>>>> 637fe6eb49b1cd565de43e9653aee505bca7fa89
       - name: 10. Pack Source Tree
         run: |
           cd "$BUILD_DIR"
           tar -czf ARCVM-SUKISU-SOURCE.tar.gz kernel_source
           du -h ARCVM-SUKISU-SOURCE.tar.gz
-<<<<<<< HEAD
-=======
 
->>>>>>> 637fe6eb49b1cd565de43e9653aee505bca7fa89
       - name: 11. Upload & QR Code
         run: |
           cd "$BUILD_DIR"
@@ -189,10 +176,7 @@ jobs:
           echo "SRC_URL=$SRC_URL" >> $GITHUB_ENV
           echo "BZ_URL=$BZ_URL" >> $GITHUB_ENV
           qrencode -t ansiutf8 "$ZIP_URL"
-<<<<<<< HEAD
-=======
 
->>>>>>> 637fe6eb49b1cd565de43e9653aee505bca7fa89
       - name: 12. Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -201,18 +185,11 @@ jobs:
             ${{ env.BUILD_DIR }}/ARCVM-SUKISU-ULTRA.zip
             ${{ env.BUILD_DIR }}/ARCVM-SUKISU-SOURCE.tar.gz
             ${{ env.BUILD_DIR }}/kernel_source/arch/x86/boot/bzImage
-<<<<<<< HEAD
-=======
 
->>>>>>> 637fe6eb49b1cd565de43e9653aee505bca7fa89
       - name: 13. SUCCESS
         run: |
           echo "ARCVM ROOT READY"
           echo "ZIP: ${{ env.ZIP_URL }}"
           echo "SOURCE: ${{ env.SRC_URL }}"
           echo "bzImage: ${{ env.BZ_URL }}"
-<<<<<<< HEAD
           echo "Flash in KernelSU → reboot → GPay works"
-=======
-          echo "Flash in KernelSU → reboot → GPay works"
->>>>>>> 637fe6eb49b1cd565de43e9653aee505bca7fa89
