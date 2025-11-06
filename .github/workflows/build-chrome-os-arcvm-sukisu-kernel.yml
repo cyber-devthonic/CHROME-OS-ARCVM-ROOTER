@@ -104,19 +104,26 @@ jobs:
           echo "kernel_source/include/linux listing:"
           ls -l kernel_source/include/linux | head -n 200 || true
 
-      - name: Fix kernel/sched/rt.c printk format
+      - name: Fix kernel/sched/rt.c printk format (corrected)
         run: |
           cd "$BUILD_DIR/kernel_source"
-          # Replace format and cast any u64 printed with %llu to prevent -Werror=format
+          # The previous replacement incorrectly referenced rq_of_rt_rq(...)->rt_time which doesn't exist.
+          # Replace the original printk to use "%llu" and cast rt_rq->rt_time to (unsigned long long).
+          # Use a robust multiline perl substitution that matches the original pattern and preserves spacing.
           perl -0777 -pe '
             s{
-              rq_of_rt_rq\(rt_rq\)->cpu\s*,\s*rt_rq->rt_time
+              printk_deferred_once\(\s*"suspected\ host\ suspend\.\ cpu\ %d\ rt_time\s*
+              \(\%ld\)\\n"\s*,\s*rq_of_rt_rq\(rt_rq\)->cpu\s*,\s*rt_rq->rt_time\s*\);
             }{
-              rq_of_rt_rq(rt_rq)->cpu, (unsigned long long)rq_of_rt_rq(rt_rq)->rt_time
-            }gxs;
-            s{\(\%ld\)\\n"}{\(%llu\)\\n"}gxs;
+              printk_deferred_once("suspected host suspend. cpu %d rt_time (%llu)\n", rq_of_rt_rq(rt_rq)->cpu, (unsigned long long)rt_rq->rt_time);
+            }mgxs;
           ' -i kernel/sched/rt.c || true
-          sed -n '970,990p' kernel/sched/rt.c || true
+
+          # Also fix any accidental previous replacement that inserted an incorrect cast on rq_of_rt_rq(...)
+          sed -i 's/(unsigned long long)rq_of_rt_rq(rt_rq)->rt_time/(unsigned long long)rt_rq->rt_time/g' kernel/sched/rt.c || true
+
+          # Show the changed snippet for debugging
+          grep -n -C3 "suspected host suspend" kernel/sched/rt.c || true
           git --no-pager diff -- kernel/sched/rt.c || true
 
       - name: 6. Configure Kernel (use scripts/config to avoid malformed .config)
