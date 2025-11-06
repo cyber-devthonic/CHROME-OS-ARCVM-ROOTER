@@ -93,7 +93,7 @@ jobs:
               cp -v "$src"/include/*.h kernel_source/include/ 2>/dev/null || true
             fi
           done
-          # workspace-wide search for susfs headers and copy
+          # workspace-wide search for susfs headers and copy them
           find . -type f \( -iname 'susfs*.h' -o -iname '*susfs*.h' \) -print | while read -r f; do
             echo "Found header: $f"
             cp -v "$f" kernel_source/include/linux/ 2>/dev/null || true
@@ -209,9 +209,20 @@ PATCH
             tail -n 200 "$LOG"
           fi
 
-      - name: 🚨 Debug failed job with tmate
+      - name: Install tmate (for interactive debug)
         if: failure()
-        uses: mxschmitt/action-tmate@v3
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmate
+
+      - name: 🚨 Start tmate (interactive debugging) on failure
+        if: failure()
+        run: |
+          # Start tmate in foreground to provide connection info in the job logs.
+          # This will block the job step, allowing you to connect using the printed session.
+          # Note: if you prefer the action-based tmate session (mxschmitt/action-tmate),
+          # replace this step with: uses: mxschmitt/action-tmate@v3
+          tmate -F
 
       - name: Fail if build failed
         if: always()
