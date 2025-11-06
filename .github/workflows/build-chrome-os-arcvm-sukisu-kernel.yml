@@ -80,23 +80,34 @@ jobs:
       - name: 5b. Install SUSFS/KernelSU headers into kernel include
         run: |
           cd "$BUILD_DIR"
+          mkdir -p kernel_source/include/linux
+          # Copy from common candidate locations
           for src in kernel_source/KernelSU include KernelSU susfs SukiSU_patch; do
             if [ -d "$src/include/linux" ]; then
-              mkdir -p kernel_source/include/linux
+              echo "copying headers from $src/include/linux -> kernel_source/include/linux"
               cp -v "$src"/include/linux/*.h kernel_source/include/linux/ 2>/dev/null || true
             fi
             if [ -d "$src/include" ]; then
-              mkdir -p kernel_source/include
+              echo "copying headers from $src/include -> kernel_source/include"
               cp -v "$src"/include/*.h kernel_source/include/ 2>/dev/null || true
             fi
           done
+          # Also perform workspace-wide search for susfs headers and copy them
+          echo "Searching for susfs headers..."
+          find . -type f \( -iname 'susfs*.h' -o -iname '*susfs*.h' \) -print | while read -r f; do
+            echo "Found header: $f"
+            cp -v "$f" kernel_source/include/linux/ 2>/dev/null || true
+          done
+          # Best-effort: copy lz4 headers (some patches place them in other locations)
           cp -v susfs/include/linux/*.h kernel_source/include/linux/ 2>/dev/null || true
           cp -v SukiSU_patch/include/linux/*.h kernel_source/include/linux/ 2>/dev/null || true
-          ls -l kernel_source/include/linux | grep -E "susfs|lz4|lz4k|lz4kd" || ls -l kernel_source/include/linux || true
+          echo "kernel_source/include/linux listing:"
+          ls -l kernel_source/include/linux | head -n 200 || true
 
       - name: Fix kernel/sched/rt.c printk format
         run: |
           cd "$BUILD_DIR/kernel_source"
+          # Replace format and cast any u64 printed with %llu to prevent -Werror=format
           perl -0777 -pe '
             s{
               rq_of_rt_rq\(rt_rq\)->cpu\s*,\s*rt_rq->rt_time
@@ -144,7 +155,6 @@ jobs:
         run: |
           cd "$BUILD_DIR/kernel_source"
           set +e
-          # Verbose build and capture stdout/stderr to build.log. Use PIPESTATUS to get make exit code.
           make ARCH=x86_64 V=1 -j$(nproc) bzImage 2>&1 | tee build.log
           BUILD_EXIT=${PIPESTATUS[0]}
           echo "BUILD_EXIT=$BUILD_EXIT" >> $GITHUB_ENV
@@ -157,11 +167,34 @@ jobs:
           name: kernel-build-log
           path: ${{ env.BUILD_DIR }}/kernel_source/build.log
 
+      - name: Dump first compile error snippet
+        if: always()
+        run: |
+          LOG="${{ env.BUILD_DIR }}/kernel_source/build.log"
+          if [ ! -f "$LOG" ]; then
+            echo "$LOG not found"
+            exit 0
+          fi
+          echo "=== First 'error' / 'fatal error' occurrence with context ==="
+          LINE=$(grep -n -E "error:|fatal error" "$LOG" | head -n1 | cut -d: -f1 || true)
+          if [ -n "$LINE" ]; then
+            START=$((LINE>10 ? LINE-10 : 1))
+            END=$((LINE+30))
+            sed -n "${START},${END}p" "$LOG"
+          else
+            echo "No explicit 'error' or 'fatal error' found; printing last 200 lines"
+            tail -n 200 "$LOG"
+          fi
+
+      - name: 🚨 Debug failed job with tmate
+        if: failure()
+        uses: mxschmitt/action-tmate@v3
+
       - name: Fail if build failed
         if: always()
         run: |
           if [ "${{ env.BUILD_EXIT }}" != "0" ]; then
-            echo "Kernel build failed with exit code ${{ env.BUILD_EXIT }} — build.log has been uploaded as artifact 'kernel-build-log'."
+            echo "Kernel build failed with exit code ${{ env.BUILD_EXIT }} — build.log uploaded as artifact 'kernel-build-log'."
             exit ${{ env.BUILD_EXIT }}
           fi
 
