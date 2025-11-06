@@ -52,73 +52,73 @@ jobs:
         run: |
           cd "$BUILD_DIR/kernel_source"
           cat > kpm-fix.patch <<'EOF'
-          diff --git a/drivers/kernelsu/kpm/kpm.c b/drivers/kernelsu/kpm/kpm.c
-          --- a/drivers/kernelsu/kpm/kpm.c
-          +++ b/drivers/kernelsu/kpm/kpm.c
-          @@ -65,7 +65,7 @@ static long sukitu_kpm_load_module_path(...)
-               char path[256];
-               size_t path_len = strlen(path);
-          -    if (copy_to_user((void __user *)arg2, &path_len, sizeof(path_len)))
-          +    if (copy_to_user((void __user *)arg2, &path_len, sizeof(path_len))) return -EFAULT;
-               return sukitu_load_module_path(path, arg3);
-           
-          @@ -80,7 +80,7 @@ static long sukitu_kpm_unload_module(...)
-               int ret = sukitu_unload_module((const char __user *)arg1);
-          -    copy_to_user((void __user *)arg2, &ret, sizeof(ret));
-          +    if (copy_to_user((void __user *)arg2, &ret, sizeof(ret))) return -EFAULT;
-               return 0;
-           
-          @@ -93,7 +93,7 @@ static long sukitu_kpm_num(...)
-               int num = sukitu_get_module_num();
-          -    copy_to_user((void __user *)arg2, &num, sizeof(num));
-          +    if (copy_to_user((void __user *)arg2, &num, sizeof(num))) return -EFAULT;
-               return 0;
-           
-          @@ -108,7 +108,7 @@ static long sukitu_kpm_info(...)
-               memset(&info, 0, sizeof(info));
-          -    copy_to_user((void __user *)arg2, &info, sizeof(info));
-          +    if (copy_to_user((void __user *)arg2, &info, sizeof(info))) return -EFAULT;
-               return 0;
-           
-          @@ -121,8 +121,8 @@ static long sukitu_kpm_list(...)
-               char *list = kzalloc(list_size, GFP_KERNEL);
-               /* fill list */
-          -    copy_to_user((void __user *)arg2, list, list_size);
-          -    copy_to_user((void __user *)arg3, &list_size, sizeof(list_size));
-          +    if (copy_to_user((void __user *)arg2, list, list_size)) return -EFAULT;
-          +    if (copy_to_user((void __user *)arg3, &list_size, sizeof(list_size))) return -EFAULT;
-               kfree(list);
-               return 0;
-           
-          @@ -136,7 +136,7 @@ static long sukitu_kpm_control(...)
-               if (copy_from_user(&ctrl, (void __user *)arg1, sizeof(ctrl)))
-                   return -EFAULT;
-          -    copy_to_user((void __user *)arg2, &ctrl, sizeof(ctrl));
-          +    if (copy_to_user((void __user *)arg2, &ctrl, sizeof(ctrl))) return -EFAULT;
-               return 0;
-           
-          @@ -149,7 +149,7 @@ static long sukitu_kpm_version(...)
-               u32 ver = KPM_VERSION;
-          -    copy_to_user((void __user *)arg2, &ver, sizeof(ver));
-          +    if (copy_to_user((void __user *)arg2, &ver, sizeof(ver))) return -EFAULT;
-               return 0;
-           
-          @@ -165,19 +165,19 @@ static long sukisu_handle_kpm(...)
-               char kernel_load_path[256] = {0};
-               char kernel_args_buffer[256] = {0};
-               char kernel_name_buffer[256] = {0};
-          -    strncpy_from_user((char *)&kernel_load_path, (const char __user *)arg3, 255);
-          +    if (strncpy_from_user((char *)&kernel_load_path, (const char __user *)arg3, 255) < 0) return -EFAULT;
-               kernel_load_path[255] = '\0';
-          -    strncpy_from_user((char *)&kernel_args_buffer, (const char __user *)arg4, 255);
-          +    if (strncpy_from_user((char *)&kernel_args_buffer, (const char __user *)arg4, 255) < 0) return -EFAULT;
-               kernel_args_buffer[255] = '\0';
-          -    strncpy_from_user((char *)&kernel_name_buffer, (const char __user *)arg3, 255);
-          +    if (strncpy_from_user((char *)&kernel_name_buffer, (const char __user *)arg3, 255) < 0) return -EFAULT;
-               kernel_name_buffer[255] = '\0';
-          -    strncpy_from_user((char *)&kernel_name_buffer, (const char __user *)arg3, 255);
-          +    if (strncpy_from_user((char *)&kernel_name_buffer, (const char __user *)arg3, 255) < 0) return -EFAULT;
-               kernel_name_buffer[255] = '\0';
+diff --git a/drivers/kernelsu/kpm/kpm.c b/drivers/kernelsu/kpm/kpm.c
+--- a/drivers/kernelsu/kpm/kpm.c
++++ b/drivers/kernelsu/kpm/kpm.c
+@@ -65,7 +65,7 @@ static long sukitu_kpm_load_module_path(...)
+     char path[256];
+     size_t path_len = strlen(path);
+-    if (copy_to_user((void __user *)arg2, &path_len, sizeof(path_len)))
++    if (copy_to_user((void __user *)arg2, &path_len, sizeof(path_len))) return -EFAULT;
+     return sukitu_load_module_path(path, arg3);
+ 
+@@ -80,7 +80,7 @@ static long sukitu_kpm_unload_module(...)
+     int ret = sukitu_unload_module((const char __user *)arg1);
+-    copy_to_user((void __user *)arg2, &ret, sizeof(ret));
++    if (copy_to_user((void __user *)arg2, &ret, sizeof(ret))) return -EFAULT;
+     return 0;
+ 
+@@ -93,7 +93,7 @@ static long sukitu_kpm_num(...)
+     int num = sukitu_get_module_num();
+-    copy_to_user((void __user *)arg2, &num, sizeof(num));
++    if (copy_to_user((void __user *)arg2, &num, sizeof(num))) return -EFAULT;
+     return 0;
+ 
+@@ -108,7 +108,7 @@ static long sukitu_kpm_info(...)
+     memset(&info, 0, sizeof(info));
+-    copy_to_user((void __user *)arg2, &info, sizeof(info));
++    if (copy_to_user((void __user *)arg2, &info, sizeof(info))) return -EFAULT;
+     return 0;
+ 
+@@ -121,8 +121,8 @@ static long sukitu_kpm_list(...)
+     char *list = kzalloc(list_size, GFP_KERNEL);
+     /* fill list */
+-    copy_to_user((void __user *)arg2, list, list_size);
+-    copy_to_user((void __user *)arg3, &list_size, sizeof(list_size));
++    if (copy_to_user((void __user *)arg2, list, list_size)) return -EFAULT;
++    if (copy_to_user((void __user *)arg3, &list_size, sizeof(list_size))) return -EFAULT;
+     kfree(list);
+     return 0;
+ 
+@@ -136,7 +136,7 @@ static long sukitu_kpm_control(...)
+     if (copy_from_user(&ctrl, (void __user *)arg1, sizeof(ctrl)))
+         return -EFAULT;
+-    copy_to_user((void __user *)arg2, &ctrl, sizeof(ctrl));
++    if (copy_to_user((void __user *)arg2, &ctrl, sizeof(ctrl))) return -EFAULT;
+     return 0;
+ 
+@@ -149,7 +149,7 @@ static long sukitu_kpm_version(...)
+     u32 ver = KPM_VERSION;
+-    copy_to_user((void __user *)arg2, &ver, sizeof(ver));
++    if (copy_to_user((void __user *)arg2, &ver, sizeof(ver))) return -EFAULT;
+     return 0;
+ 
+@@ -165,19 +165,19 @@ static long sukisu_handle_kpm(...)
+     char kernel_load_path[256] = {0};
+     char kernel_args_buffer[256] = {0};
+     char kernel_name_buffer[256] = {0};
+-    strncpy_from_user((char *)&kernel_load_path, (const char __user *)arg3, 255);
++    if (strncpy_from_user((char *)&kernel_load_path, (const char __user *)arg3, 255) < 0) return -EFAULT;
+     kernel_load_path[255] = '\0';
+-    strncpy_from_user((char *)&kernel_args_buffer, (const char __user *)arg4, 255);
++    if (strncpy_from_user((char *)&kernel_args_buffer, (const char __user *)arg4, 255) < 0) return -EFAULT;
+     kernel_args_buffer[255] = '\0';
+-    strncpy_from_user((char *)&kernel_name_buffer, (const char __user *)arg3, 255);
++    if (strncpy_from_user((char *)&kernel_name_buffer, (const char __user *)arg3, 255) < 0) return -EFAULT;
+     kernel_name_buffer[255] = '\0';
+-    strncpy_from_user((char *)&kernel_name_buffer, (const char __user *)arg3, 255);
++    if (strncpy_from_user((char *)&kernel_name_buffer, (const char __user *)arg3, 255) < 0) return -EFAULT;
+     kernel_name_buffer[255] = '\0';
           EOF
           git apply kpm-fix.patch && echo "KPM copy-size bug SMASHED"
 
