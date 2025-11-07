@@ -1,165 +1,186 @@
-name: Build Kernels
-
-permissions:
-  contents: write
-  actions: write
-
+name: ARCVM SukiSU Ultra
 on:
   workflow_dispatch:
     inputs:
-      release_type:
-        description: "Choose Release Type"
-        required: true
-        type: choice
-        options:
-          - Actions
-          - Pre-Release
-          - Release
-        default: Actions
-      build_selection:
-        description: "Choose which kernels to build"
-        required: true
-        type: choice
-        options:
-          - All
-          - Test Build
-          - Android12-5.10
-          - Android13-5.10
-          - Android13-5.15
-          - Android14-5.15
-          - Android14-6.1
-          - Android15-6.6
-          - ARCVM
-        default: All
-
+      ZRAM_LZ4KD:
+        type: boolean
+        default: true
+        description: "LZ4KD + ZRAM ultra-compression?"
+      HIDE_APPS:
+        type: boolean
+        default: true
+        description: "Hide root from banking apps?"
 jobs:
-
-  build-test:
-    if: inputs.build_selection == 'Test Build'
-    uses: ./.github/workflows/test-build.yml
-    secrets: inherit
-
-  build-a12-5-10:
-    if: (inputs.build_selection == 'All' || inputs.build_selection == 'Android12-5.10')
-    uses: ./.github/workflows/kernel-a12-5-10.yml
-    secrets: inherit
-
-  build-a13-5-10:
-    if: (inputs.build_selection == 'All' || inputs.build_selection == 'Android13-5.10')
-    uses: ./.github/workflows/kernel-a13-5-10.yml
-    secrets: inherit
-
-  build-a13-5-15:
-    if: (inputs.build_selection == 'All' || inputs.build_selection == 'Android13-5.15')
-    uses: ./.github/workflows/kernel-a13-5-15.yml
-    secrets: inherit
-
-  build-a14-5-15:
-    if: (inputs.build_selection == 'All' || inputs.build_selection == 'Android14-5.15')
-    uses: ./.github/workflows/kernel-a14-5-15.yml
-    secrets: inherit
-
-  build-a14-6-1:
-    if: (inputs.build_selection == 'All' || inputs.build_selection == 'Android14-6.1')
-    uses: ./.github/workflows/kernel-a14-6-1.yml
-    secrets: inherit
-
-  build-a15-6-6:
-    if: (inputs.build_selection == 'All' || inputs.build_selection == 'Android15-6.6')
-    uses: ./.github/workflows/kernel-a15-6-6.yml
-    secrets: inherit
-
-  build-arcvm:
-    if: (inputs.build_selection == 'All' || inputs.build_selection == 'ARCVM')
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Install build dependencies
+      - name: 1. Maximize Disk & Swap
         run: |
           sudo apt update
-          sudo apt install -y build-essential libncurses-dev bison flex libssl-dev bc git zip
-
-      - name: Set build directory
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo fallocate -l 12G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          sudo apt install -y git curl wget build-essential bc bison flex \
+            libelf-dev libssl-dev libncurses5-dev python3 cpio unzip jq \
+            device-tree-compiler clang lld llvm zip qrencode ccache
+          free -h && df -h
+          
+      # Setup ccache for incremental builds
+      - name: 1.1. Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-kernel-arcvm-${{ hashFiles('**/Makefile') }}
+          max-size: 2G  # Allocate 2GB for ccache
+          
+      - name: 2. Create Build Directory
         run: |
-          BUILD_DIR=$(pwd)/arcvm_build
+          export BUILD_DIR="$HOME/arcvm_root_build"
           mkdir -p "$BUILD_DIR"
+          cd "$BUILD_DIR"
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
-
-      - name: Clone ChromeOS 5.10 ARCVM Kernel
+          pwd
+      - name: 3. Clone ChromeOS 5.10 ARCVM Kernel
         run: |
           cd "$BUILD_DIR"
           git clone --depth=1 https://chromium.googlesource.com/chromiumos/third_party/kernel.git -b chromeos-5.10-arcvm kernel_source
           cd kernel_source && git log -1 --oneline
-
-      - name: Prepare kernel
+      - name: 4. Inject SukiSU-Ultra
         run: |
-          KERNEL_DIR=$(find "$BUILD_DIR/kernel_source" -maxdepth 2 -type f -name Makefile -execdir test -d arch \; -print -quit)
-          if [ -z "$KERNEL_DIR" ]; then
-            echo "No kernel source found"
-            exit 1
+          cd "$BUILD_DIR/kernel_source"
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-main
+          cd KernelSU
+          KSU_VERSION=$(($(git rev-list --count main) + 10606))
+          echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+          sed -i "s/DKSU_VERSION=12800/DKSU_VERSION=$KSU_VERSION/" ../Makefile
+          echo "SukiSU Ultra v$KSU_VERSION injected"
+      - name: Disable Werror for KPM module
+        run: |
+          cd "$BUILD_DIR/kernel_source/drivers/kernelsu/kpm"
+          echo "CFLAGS_kpm.o := -Wno-error" >> Makefile
+      - name: 5. Apply All Patches
+        run: |
+          cd "$BUILD_DIR"
+          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android13-5.10 susfs
+          git clone --depth=1 https://github.com/ShirkNeko/SukiSU_patch.git
+          cd kernel_source
+          cp ../susfs/kernel_patches/50_add_susfs_in_gki-android13-5.10.patch .
+          patch -p1 < 50_add_susfs_in_gki-android13-5.10.patch || true
+          cp ../SukiSU_patch/69_hide_stuff.patch .
+          patch -p1 -F3 < 69_hide_stuff.patch
+          cp ../SukiSU_patch/hooks/syscall_hooks.patch .
+          patch -p1 -F3 < syscall_hooks.patch
+          if [[ "${{ inputs.ZRAM_LZ4KD }}" == "true" ]]; then
+            cp -r ../SukiSU_patch/other/zram/lz4k/* .
+            cp ../SukiSU_patch/other/zram/zram_patch/5.10/lz4kd.patch . && patch -p1 < lz4kd.patch || true
           fi
-          echo "KERNEL_DIR=$KERNEL_DIR" >> $GITHUB_ENV
-          cd "$KERNEL_DIR"
-          make x86_64_defconfig
-          scripts/config --enable CONFIG_KVM
-          scripts/config --enable CONFIG_VIRTIO
-          scripts/config --enable CONFIG_VHOST_NET
-
-      - name: Build ARCVM kernel
+          git status --short
+      - name: Fix kernel/sched/rt.c printk format
         run: |
-          cd "$KERNEL_DIR"
-          make -j$(nproc) bzImage
-          mkdir -p "$BUILD_DIR/artifacts"
-          cp arch/x86/boot/bzImage "$BUILD_DIR/artifacts/arcvm-bzimage"
-
-      - name: Upload ARCVM artifact
-        uses: actions/upload-artifact@v5
-        with:
-          name: ARCVM-Kernel
-          path: "$BUILD_DIR/artifacts/arcvm-bzimage"
-
-  release:
-    runs-on: ubuntu-latest
-    if: inputs.release_type != 'Actions'
-    needs:
-      - build-a12-5-10
-      - build-a13-5-10
-      - build-a13-5-15
-      - build-a14-5-15
-      - build-a14-6-1
-      - build-a15-6-6
-      - build-arcvm
-    env:
-      GH_TOKEN: ${{ github.token }}
-      RELEASE_NAME: "GKI & ARCVM Kernels v1.5.12"
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v5
-        with:
-          path: ./downloaded-artifacts
-
-      - name: Generate New Tag
+          cd "$BUILD_DIR/kernel_source"
+          sed -i 's/"(%ld)\n", rq_of_rt_rq(rt_rq)->cpu, rt_rq->rt_time);/"(%llu)\n", rq_of_rt_rq(rt_rq)->cpu, rt_rq->rt_time);/g' kernel/sched/rt.c
+      - name: 6. Configure Kernel
         run: |
-          LATEST_TAG=$(gh api repos/${{ github.repository }}/tags --jq '.[0].name' 2>/dev/null || echo "v1.5.12-r0")
-          NEW_TAG=$(echo "$LATEST_TAG" | awk -F'-r' '{suffix=$2; if (!suffix) suffix=0; suffix++; printf "%s-r%d", $1, suffix}')
-          echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.NEW_TAG }}
-          prerelease: ${{ inputs.release_type == 'Pre-Release' }}
-          files: ./downloaded-artifacts/**
-          name: ${{ env.RELEASE_NAME }}
-          body: "All kernels built including ARCVM"
-
-      - name: Send Telegram Notification
+          cd "$BUILD_DIR/kernel_source"
+          make ARCH=x86_64 x86_64_arcvm_defconfig
+          cat >> .config <<'EOF'
+          CONFIG_KSU=y
+          CONFIG_KPM=y
+          CONFIG_KSU_MANUAL_HOOK=y
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_ZSMALLOC=y
+          CONFIG_ZRAM=y
+          CONFIG_CRYPTO_LZ4HC=y
+          CONFIG_CRYPTO_LZ4K=y
+          CONFIG_CRYPTO_LZ4KD=y
+          CONFIG_CRYPTO_842=y
+          CONFIG_ZRAM_DEF_COMP_LZ4KD=y
+          CONFIG_ZRAM_WRITEBACK=y
+          EOF
+          sed -i 's/ -dirty//g' scripts/setlocalversion
+          grep KSU .config | head -5
+          
+          # Configure ccache for kernel build
+          echo "CONFIG_CCACHE=y" >> .config
+          echo "KBUILD_COMPILER_LAUNCHER := ccache" >> Makefile
+          
+      - name: 7. Build bzImage
+        timeout-minutes: 20
         run: |
-          curl -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-            -F chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-            -F text="🚀 New Kernel Release ${{ env.NEW_TAG }} uploaded! 🔗 https://github.com/${{ github.repository }}/releases/tag/${{ env.NEW_TAG }}"
+          cd "$BUILD_DIR/kernel_source"
+          # Set up ccache in path
+          export PATH="/usr/lib/ccache:$PATH"
+          # Build with ccache
+          make ARCH=x86_64 CC="ccache gcc" -j$(nproc) bzImage
+          ls -lh arch/x86/boot/bzImage
+          file arch/x86/boot/bzImage
+          
+          # Display ccache statistics
+          echo "=== CCACHE STATISTICS ==="
+          ccache -s
+          
+      - name: 8. Download SUSFS Module (CI)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd "$BUILD_DIR"
+          LATEST_ID=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" "https://api.github.com/repos/sidex15/susfs4ksu-module/actions/runs?status=success" | jq -r '.workflow_runs[] | select(.head_branch=="v1.5.2+") | .id' | head -1)
+          ARTIFACT_URL=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" "https://api.github.com/repos/sidex15/susfs4ksu-module/actions/runs/$LATEST_ID/artifacts" | jq -r '.artifacts[0].archive_download_url')
+          curl -L -H "Authorization: Bearer $GITHUB_TOKEN" -o susfs.zip "$ARTIFACT_URL"
+          unzip -l susfs.zip | head -3
+      - name: 9. Pack Flashable ZIP
+        run: |
+          cd "$BUILD_DIR"
+          git clone --depth=1 https://github.com/Numbersf/AnyKernel3
+          cp kernel_source/arch/x86/boot/bzImage AnyKernel3/
+          unzip -o susfs.zip -d AnyKernel3/modules/
+          cd AnyKernel3
+          zip -r9 "../ARCVM-SUKISU-ULTRA.zip" * -x .git
+          ls -lh ../ARCVM-SUKISU-ULTRA.zip
+      - name: 10. Pack Source Tree
+        run: |
+          cd "$BUILD_DIR"
+          tar -czf ARCVM-SUKISU-SOURCE.tar.gz kernel_source
+          du -h ARCVM-SUKISU-SOURCE.tar.gz
+      - name: 11. Upload & QR Code
+        run: |
+          cd "$BUILD_DIR"
+          upload() { curl --progress-bar -T "$1" https://transfer.sh/$(basename "$1"); echo; }
+          ZIP_URL=$(upload ARCVM-SUKISU-ULTRA.zip)
+          SRC_URL=$(upload ARCVM-SUKISU-SOURCE.tar.gz)
+          BZ_URL=$(upload kernel_source/arch/x86/boot/bzImage)
+          echo "ZIP_URL=$ZIP_URL" >> $GITHUB_ENV
+          echo "SRC_URL=$SRC_URL" >> $GITHUB_ENV
+          echo "BZ_URL=$BZ_URL" >> $GITHUB_ENV
+          qrencode -t ansiutf8 "$ZIP_URL"
+      - name: 12. Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ARCVM-SUKISU-ULTRA-v${{ env.KSUVER }}
+          path: |
+            ${{ env.BUILD_DIR }}/ARCVM-SUKISU-ULTRA.zip
+            ${{ env.BUILD_DIR }}/ARCVM-SUKISU-SOURCE.tar.gz
+            ${{ env.BUILD_DIR }}/kernel_source/arch/x86/boot/bzImage
+      - name: 13. SUCCESS
+        run: |
+          echo "ARCVM ROOT READY"
+          echo "ZIP: ${{ env.ZIP_URL }}"
+          echo "SOURCE: ${{ env.SRC_URL }}"
+          echo "bzImage: ${{ env.BZ_URL }}"
+          echo "Flash in KernelSU → reboot → GPay works"
